@@ -5,6 +5,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.nio.charset.Charset;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,63 +23,108 @@ public class Launcher {
 
     public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
         long init = System.currentTimeMillis();
-        String excelFile = "C:/Downloads/BigSpreadsheet.xlsx";
+        String excelFile = "D:/Downloads/BigSpreadsheet.xlsx";
         ZipFile zipFile = new ZipFile(excelFile);
 
         ExecutorService executor = Executors.newFixedThreadPool(4);
         Future<String[]> futureWords = executor.submit(() -> processSharedStrings(zipFile));
-        Future<String[][]> futureSheet1 = executor.submit(() -> processSheet1(zipFile));
+        Future<Object[][]> futureSheet1 = executor.submit(() -> processSheet1(zipFile));
         String[] words = futureWords.get();
-        String[][] sheet1 = futureSheet1.get();
+        Object[][] sheet1 = futureSheet1.get();
+        executor.shutdown();
 
         long end = System.currentTimeMillis();
         System.out.println("Main only open and read: " + (end - init) / 1000);
 
+
         ///Doing somethin with the file::Saving as csv
-        try(PrintWriter writer = new PrintWriter(excelFile + ".csv", "UTF-8");){
-            for (String[] rows : sheet1) {
-                for (String cell : rows) {
-                    if(cell!=null){
-                        writer.append(words[Integer.parseInt(cell)]);
+        init = System.currentTimeMillis();
+        try (PrintWriter writer = new PrintWriter(excelFile + ".csv", "UTF-8");) {
+            for (Object[] rows : sheet1) {
+                for (Object cell : rows) {
+                    if (cell != null) {
+                        if (cell instanceof Integer) {
+                            writer.append(words[(Integer) cell]);
+                        } else if (cell instanceof String) {
+                            writer.append(toDate(Double.parseDouble(cell.toString())));
+                        } else {
+                            writer.append(cell.toString()); //Probably a number
+                        }
                     }
                     writer.append(";");
                 }
                 writer.append("\n");
             }
         }
-        executor.shutdown();
+        end = System.currentTimeMillis();
+        System.out.println("Main saving to csv: " + (end - init) / 1000);
     }
 
-    public static String[][] processSheet1(ZipFile zipFile) throws IOException {
+    private static final DateTimeFormatter formatter = DateTimeFormatter.ISO_DATE_TIME;
+    private static final LocalDateTime INIT_DATE = LocalDateTime.parse("1900-01-01T00:00:00+00:00", formatter).plusDays(-2);
+
+    //The number in excel is from 1900-jan-1, so every number time that you get, you have to sum to that date
+    public static String toDate(double s) {
+        return formatter.format(INIT_DATE.plusSeconds((long) ((s*24*3600))));
+    }
+
+    public static Object[][] processSheet1(ZipFile zipFile) throws IOException {
         String entry = "xl/worksheets/sheet1.xml";
-        String[][] result = null;
+        Object[][] result = null;
         char[] dimensionToken = "dimension ref=\"".toCharArray();
         char[] tokenOpenC = "<c r=\"".toCharArray();
         char[] tokenOpenV = "<v>".toCharArray();
+
+        char[] tokenAttributS = " s=\"".toCharArray();
+        char[] tokenAttributT = " t=\"".toCharArray();
         try (BufferedReader br = new BufferedReader(new InputStreamReader(zipFile.getInputStream(zipFile.getEntry(entry)), Charset.forName("UTF-8")))) {
             String dimension = extractNextValue(br, dimensionToken, '"');
             int[] sizes = extractSizeFromDimention(dimension.split(":")[1]);
             br.skip(30); //Between dimension and next tag c exists more or less 30 chars
-            result = new String[sizes[0]][sizes[1]];
+            result = new Object[sizes[0]][sizes[1]];
             String v;
-            while((v = extractNextValue(br, tokenOpenC, '"'))!=null){
+            while ((v = extractNextValue(br, tokenOpenC, '"')) != null) {
                 int[] indexes = extractSizeFromDimention(v);
-                br.skip(7); // t="s">
+
+                int s = foundNextTokens(br, '>', tokenAttributS, tokenAttributT);
+                char type = 's'; //3 types: number (n), string (s) and date (d)
+                if (s == 0) { // Token S = number or date
+                    char read = (char) br.read();
+                    if (read == '1') {
+                        type = 'n';
+                    } else {
+                        type = 'd';
+                    }
+                } else if (s == -1) {
+                    type = 'n';
+                }
                 String c = extractNextValue(br, tokenOpenV, '<');
-                result[indexes[0]-1][indexes[1]-1] = c;
+                Object value = null;
+                switch (type) {
+                    case 'n':
+                        value = Double.parseDouble(c);
+                        break;
+                    case 's':
+                        value = Integer.parseInt(c);
+                        break;
+                    case 'd':
+                        value = c.toString();
+                        break;
+                }
+                result[indexes[0] - 1][indexes[1] - 1] = value;
                 br.skip(7); ///v></c>
             }
         }
         return result;
     }
 
-    public static int[] extractSizeFromDimention(String dimention){
+    public static int[] extractSizeFromDimention(String dimention) {
         StringBuilder sb = new StringBuilder();
         int columns = 0;
         int rows = 0;
         for (char c : dimention.toCharArray()) {
-            if(columns==0){
-                if(Character.isDigit(c)){
+            if (columns == 0) {
+                if (Character.isDigit(c)) {
                     columns = convertExcelIndex(sb.toString());
                     sb = new StringBuilder();
                 }
@@ -105,10 +153,13 @@ public class Launcher {
         return words;
     }
 
-    public static int foundNextTokens(BufferedReader br, char[]... tokens) throws IOException {
+    public static int foundNextTokens(BufferedReader br, char until, char[]... tokens) throws IOException {
         char character;
         int[] indexes = new int[tokens.length];
         while ((character = (char) br.read()) != CHAR_END) {
+            if (character == until) {
+                break;
+            }
             for (int i = 0; i < indexes.length; i++) {
                 if (tokens[i][indexes[i]] == character) {
                     indexes[i]++;
