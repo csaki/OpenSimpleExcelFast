@@ -23,7 +23,7 @@ public class Launcher {
 
     public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
         long init = System.currentTimeMillis();
-        String excelFile = "D:/Downloads/BigSpreadsheet.xlsx";
+        String excelFile = "/home/devsaki/Downloads/BigSpreadsheetAllTypes.xlsx";
         ZipFile zipFile = new ZipFile(excelFile);
 
         ExecutorService executor = Executors.newFixedThreadPool(4);
